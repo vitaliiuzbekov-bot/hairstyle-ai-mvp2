@@ -6,6 +6,20 @@ import { doc, getDoc, setDoc, updateDoc, serverTimestamp, increment } from 'fire
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { handleFirestoreError, OperationType } from './firebase';
 
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: {
+        expand?: () => void;
+        initDataUnsafe?: any;
+        openInvoice?: (url: string, callback: (status: string) => void) => void;
+        showPopup?: (params: any, callback: (buttonId: string) => void) => void;
+        showAlert?: (message: string) => void;
+      };
+    };
+  }
+}
+
 // The LazyImage component generates reference images on demand via Gemini
 const globalImageCache: Record<string, string> = {};
 
@@ -474,6 +488,71 @@ export default function App() {
     cameraInputRef.current?.click();
   };
 
+  const openTelegramFilePicker = (fallbackAction: () => void): Promise<File | null> => {
+    return new Promise((resolve) => {
+      const tg = window.Telegram?.WebApp;
+      if (!tg || !tg.showPopup) {
+        fallbackAction();
+        resolve(null);
+        return;
+      }
+
+      tg.showPopup({
+        title: 'Загрузить фото',
+        message: 'Выберите источник',
+        buttons: [
+          { id: 'camera', type: 'default', text: '📸 Камера' },
+          { id: 'gallery', type: 'default', text: '🖼 Галерея' },
+          { id: 'cancel', type: 'cancel', text: 'Отмена' }
+        ]
+      }, (buttonId: string) => {
+        if (!buttonId || buttonId === 'cancel') {
+          resolve(null);
+          return;
+        }
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/jpeg,image/png,image/webp,image/heic';
+        if (buttonId === 'camera') {
+          input.setAttribute('capture', 'environment');
+        }
+        input.onchange = (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0];
+          resolve(file || null);
+          input.remove();
+        };
+        input.click();
+      });
+    });
+  };
+
+  const handleTelegramUploadClick = async (isCamera: boolean, e?: React.MouseEvent) => {
+    if (!consentGiven) {
+      if (e) {
+        e.stopPropagation();
+        setConsentError(true);
+        if (navigator.vibrate) navigator.vibrate(200);
+      }
+      return;
+    }
+    setConsentError(false);
+
+    const tg = window.Telegram?.WebApp;
+    if (tg && tg.showPopup) {
+      const file = await openTelegramFilePicker(isCamera ? triggerCameraInput : triggerFileInput);
+      if (file) {
+        const fakeEvent = { target: { files: [file] } } as unknown as React.ChangeEvent<HTMLInputElement>;
+        handleFileUpload(fakeEvent);
+      }
+    } else {
+      if (isCamera) {
+          triggerCameraInput();
+      } else {
+          triggerFileInput();
+      }
+    }
+  };
+
   const fallbackFaceApi = async () => {
     try {
       if (!imageBase64) return null;
@@ -760,14 +839,14 @@ export default function App() {
                         
                         <div className="flex flex-col sm:flex-row gap-4 w-full px-6 max-w-[400px]">
                             <button 
-                              onClick={triggerCameraInput}
+                              onClick={(e) => handleTelegramUploadClick(true, e)}
                               className={`flex-1 glass-button text-white/90 border py-3 sm:py-3.5 rounded-full text-[13px] sm:text-sm font-medium tracking-wide transition-all flex items-center justify-center gap-2 ${consentGiven ? 'hover:bg-white/10 border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.37)] active:scale-95' : 'opacity-50 border-white/10 grayscale cursor-not-allowed'}`}
                             >
                               <Camera size={16} />
                               Сделать фото
                             </button>
                             <button 
-                              onClick={triggerFileInput}
+                              onClick={(e) => handleTelegramUploadClick(false, e)}
                               className={`flex-1 glass-button text-white/90 border py-3 sm:py-3.5 rounded-full text-[13px] sm:text-sm font-medium tracking-wide transition-all flex items-center justify-center gap-2 ${consentGiven ? 'hover:bg-white/10 border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.37)] active:scale-95' : 'opacity-50 border-white/10 grayscale cursor-not-allowed'}`}
                             >
                               <ImageIcon size={16} />
