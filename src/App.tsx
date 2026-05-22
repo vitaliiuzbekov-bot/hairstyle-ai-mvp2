@@ -488,68 +488,96 @@ export default function App() {
     cameraInputRef.current?.click();
   };
 
-  const openTelegramFilePicker = (fallbackAction: () => void): Promise<File | null> => {
-    return new Promise((resolve) => {
-      const tg = window.Telegram?.WebApp;
-      if (!tg || !tg.showPopup) {
-        fallbackAction();
-        resolve(null);
-        return;
-      }
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [facingMode, setCameraFacingMode] = useState<"user" | "environment">("user");
+  const customVideoRef = useRef<HTMLVideoElement>(null);
 
-      tg.showPopup({
-        title: 'Загрузить фото',
-        message: 'Выберите источник',
-        buttons: [
-          { id: 'camera', type: 'default', text: '📸 Камера' },
-          { id: 'gallery', type: 'default', text: '🖼 Галерея' },
-          { id: 'cancel', type: 'cancel', text: 'Отмена' }
-        ]
-      }, (buttonId: string) => {
-        if (!buttonId || buttonId === 'cancel') {
-          resolve(null);
-          return;
-        }
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/jpeg,image/png,image/webp,image/heic';
-        if (buttonId === 'camera') {
-          input.setAttribute('capture', 'environment');
-        }
-        input.onchange = (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0];
-          resolve(file || null);
-          input.remove();
-        };
-        input.click();
-      });
-    });
+  const stopCamera = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
+    }
+    setIsCameraModalOpen(false);
   };
 
-  const handleTelegramUploadClick = async (isCamera: boolean, e?: React.MouseEvent) => {
+  const startCameraLocal = async (mode: "user" | "environment" = facingMode) => {
+    try {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+      setIsCameraModalOpen(true);
+      
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: mode }
+      });
+      setCameraStream(stream);
+      if (customVideoRef.current) {
+        customVideoRef.current.srcObject = stream;
+      }
+      setCameraFacingMode(mode);
+    } catch (err) {
+      console.error("Camera error:", err);
+      // Fallback if mediaDevices fails during access
+      setIsCameraModalOpen(false);
+      alert("Не удалось получить доступ к камере. Пожалуйста, разрешите доступ в браузере или используйте загрузку из галереи.");
+    }
+  };
+
+  const capturePhoto = () => {
+    if (customVideoRef.current) {
+      const canvas = document.createElement("canvas");
+      canvas.width = customVideoRef.current.videoWidth;
+      canvas.height = customVideoRef.current.videoHeight;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        if (facingMode === "user") {
+          ctx.translate(canvas.width, 0);
+          ctx.scale(-1, 1);
+        }
+        ctx.drawImage(customVideoRef.current, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const file = new File([blob], "camera_photo.jpg", { type: "image/jpeg" });
+            const fakeEvent = { target: { files: [file] } } as unknown as React.ChangeEvent<HTMLInputElement>;
+            handleFileUpload(fakeEvent);
+            stopCamera();
+          }
+        }, "image/jpeg", 0.9);
+      }
+    }
+  };
+
+  useEffect(() => {
+    // cleanup camera on unmount
+    return () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [cameraStream]);
+
+  const handleTelegramUploadClick = (isCamera: boolean, e?: React.MouseEvent) => {
     if (!consentGiven) {
       if (e) {
         e.stopPropagation();
         setConsentError(true);
-        if (navigator.vibrate) navigator.vibrate(200);
+        try { if (navigator.vibrate) navigator.vibrate(200); } catch(err) {}
       }
       return;
     }
     setConsentError(false);
 
-    const tg = window.Telegram?.WebApp;
-    if (tg && tg.showPopup) {
-      const file = await openTelegramFilePicker(isCamera ? triggerCameraInput : triggerFileInput);
-      if (file) {
-        const fakeEvent = { target: { files: [file] } } as unknown as React.ChangeEvent<HTMLInputElement>;
-        handleFileUpload(fakeEvent);
+    if (isCamera) {
+      // Synchronous check to preserve user interaction token for fallback file input trigger
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        startCameraLocal("user"); 
+      } else {
+        console.warn("navigator.mediaDevices is unavailable, using standard file input fallback.");
+        triggerCameraInput();
       }
     } else {
-      if (isCamera) {
-          triggerCameraInput();
-      } else {
-          triggerFileInput();
-      }
+      triggerFileInput();
     }
   };
 
@@ -856,16 +884,17 @@ export default function App() {
                         
                         <input 
                           type="file" 
-                          accept="image/jpeg,image/png,image/webp,image/heic" 
+                          accept="image/*" 
                           ref={fileInputRef} 
-                          className="hidden" 
+                          className="absolute w-px h-px opacity-0 overflow-hidden pointer-events-none -z-10" 
                           onChange={handleFileUpload} 
                         />
                         <input 
                           type="file" 
-                          accept="image/jpeg,image/png,image/webp,image/heic" 
+                          accept="image/*" 
                           ref={cameraInputRef} 
-                          className="hidden" 
+                          capture="environment"
+                          className="absolute w-px h-px opacity-0 overflow-hidden pointer-events-none -z-10" 
                           onChange={handleFileUpload} 
                         />
                       </div>
@@ -1194,6 +1223,47 @@ export default function App() {
       )}
 
 
+
+      {isCameraModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
+          <video
+            ref={customVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`absolute inset-0 w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+          />
+          
+          <div className="absolute top-0 inset-x-0 p-4 sm:p-6 flex justify-end bg-gradient-to-b from-black/60 to-transparent">
+             <button 
+                onClick={stopCamera}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-black/40 backdrop-blur-md border border-white/20 flex items-center justify-center text-white cursor-pointer hover:bg-black/60 transition-all"
+             >
+                <X size={24} />
+             </button>
+          </div>
+
+          <div className="absolute bottom-0 inset-x-0 p-6 sm:p-10 flex items-center justify-between bg-gradient-to-t from-black/80 via-black/40 to-transparent">
+             <div className="w-12 h-12 sm:w-14 sm:h-14">
+               {/* Spacer for centering logic if button removed, or leave flip logic */}
+             </div>
+
+             <button 
+                onClick={capturePhoto}
+                className="w-20 h-20 sm:w-24 sm:h-24 rounded-full border-4 border-white/40 bg-white/20 backdrop-blur-sm flex items-center justify-center cursor-pointer hover:bg-white/30 transition-all active:scale-95 shadow-[0_0_20px_rgba(255,255,255,0.3)]"
+             >
+                <div className="w-16 h-16 sm:w-20 sm:h-20 bg-white rounded-full"></div>
+             </button>
+
+             <button 
+                onClick={() => startCameraLocal(facingMode === 'user' ? 'environment' : 'user')}
+                className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-black/40 backdrop-blur-md border border-white/20 flex items-center justify-center text-white cursor-pointer hover:bg-black/60 transition-all"
+             >
+                <RefreshCw size={24} />
+             </button>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes scan {
