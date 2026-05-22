@@ -777,14 +777,14 @@ export default function App() {
                         
                         <input 
                           type="file" 
-                          accept="image/*" 
+                          accept="image/jpeg,image/png,image/webp,image/heic" 
                           ref={fileInputRef} 
                           className="hidden" 
                           onChange={handleFileUpload} 
                         />
                         <input 
                           type="file" 
-                          accept="image/*" 
+                          accept="image/jpeg,image/png,image/webp,image/heic" 
                           ref={cameraInputRef} 
                           className="hidden" 
                           onChange={handleFileUpload} 
